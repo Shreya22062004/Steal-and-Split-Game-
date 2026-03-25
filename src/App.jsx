@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import "./styles.css";
-
+import { getAiMove } from "./aiEngine";
+import { db } from "./firebase";
+import { ref, push, onValue } from "firebase/database";
 const STORAGE_KEY = "split-steal-history-v2";
 
 const rulesList = [
@@ -46,7 +48,7 @@ function getOutcome(playerChoice, opponentChoice, rewardPool, mode) {
       explanation:
         mode === "pvp"
           ? "Both players stayed balanced and shared the reward."
-          : "You and the AI both played safe. Trust paid off this round.",
+          : "AI chose based on your previous behavior pattern.",
       rewardText: "Shared reward unlocked",
       coins: 2,
     };
@@ -97,26 +99,6 @@ function getOutcome(playerChoice, opponentChoice, rewardPool, mode) {
   };
 }
 
-function getAiChoice(playerChoice, history, rewardPool, signalHint) {
-  const total = history.length;
-  const playerSteals = history.filter((r) => r.playerChoice === "Steal").length;
-  const playerSplitRate = total === 0 ? 0.5 : (total - playerSteals) / total;
-
-  let stealBias = 0.45;
-
-  if (rewardPool >= 180) stealBias += 0.12;
-  if (rewardPool >= 260) stealBias += 0.08;
-  if (playerChoice === "Steal") stealBias += 0.12;
-  if (playerSplitRate > 0.65) stealBias += 0.08;
-
-  if (signalHint.includes("cooperation")) stealBias -= 0.08;
-  if (signalHint.includes("Aggression")) stealBias += 0.08;
-  if (signalHint.includes("misleading")) stealBias += Math.random() > 0.5 ? 0.08 : -0.08;
-
-  stealBias = Math.max(0.2, Math.min(0.82, stealBias));
-
-  return Math.random() < stealBias ? "Steal" : "Split";
-}
 
 function getSimulatedPlayer2Choice(roundNumber, rewardPool) {
   let stealChance = 0.45;
@@ -157,6 +139,12 @@ function getAvatarMoodConfig(state, mode) {
 }
 
 export default function App() {
+  const [strategy, setStrategy] = useState("adaptive");
+
+  const saveGame = (roundData) => {
+    console.log("Saving to Firebase:", roundData);
+    push(ref(db, "games/"), roundData);
+  };
   const [currentScreen, setCurrentScreen] = useState("home");
   const [mode, setMode] = useState("ai");
   const [history, setHistory] = useState([]);
@@ -176,6 +164,7 @@ export default function App() {
   const [streak, setStreak] = useState(0);
   const [timeLeft, setTimeLeft] = useState(8);
   const [timerActive, setTimerActive] = useState(false);
+
 
   const audioContextRef = useRef(null);
   const bgIntervalRef = useRef(null);
@@ -207,29 +196,42 @@ export default function App() {
     );
   }, [history, rewardPool, streak, mode]);
 
-useEffect(() => {
-  if (currentScreen === "play" && !aiThinking && !showOverlay && !currentResult) {
-    setTimeLeft(8);
-    setTimerActive(true);
+  // ✅ FIREBASE REAL-TIME LOAD
+  useEffect(() => {
+    const gameRef = ref(db, "games/");
 
-    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-    timerIntervalRef.current = setInterval(() => {
-      setTimeLeft((prev) => {
-        if (prev <= 1) {
-          clearInterval(timerIntervalRef.current);
-          setTimerActive(false);
-          handleTimedAutoChoice();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-  }
+    onValue(gameRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const loaded = Object.values(data);
+        setHistory(loaded);
+      }
+    });
+  }, []);
 
-  return () => {
-    if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
-  };
-}, [currentScreen, aiThinking, showOverlay, currentResult]);
+  useEffect(() => {
+    if (currentScreen === "play" && !aiThinking && !showOverlay && !currentResult) {
+      setTimeLeft(8);
+      setTimerActive(true);
+
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+      timerIntervalRef.current = setInterval(() => {
+        setTimeLeft((prev) => {
+          if (prev <= 1) {
+            clearInterval(timerIntervalRef.current);
+            setTimerActive(false);
+            handleTimedAutoChoice();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+
+    return () => {
+      if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+    };
+  }, [currentScreen, aiThinking, showOverlay, currentResult]);
 
   useEffect(() => {
     return () => {
@@ -293,19 +295,19 @@ useEffect(() => {
   };
 
   const startBackgroundMusic = () => {
-  if (!soundOn) return;
-  if (bgIntervalRef.current) return;
+    if (!soundOn) return;
+    if (bgIntervalRef.current) return;
 
-  const playLoop = () => {
-    playTone(196, 0.9, "sine", 0.025, 0);
-    playTone(247, 1.0, "triangle", 0.02, 0.18);
-    playTone(294, 0.95, "sine", 0.018, 0.4);
-    playTone(392, 1.1, "triangle", 0.016, 0.62);
+    const playLoop = () => {
+      playTone(196, 0.9, "sine", 0.025, 0);
+      playTone(247, 1.0, "triangle", 0.02, 0.18);
+      playTone(294, 0.95, "sine", 0.018, 0.4);
+      playTone(392, 1.1, "triangle", 0.016, 0.62);
+    };
+
+    playLoop();
+    bgIntervalRef.current = setInterval(playLoop, 1800);
   };
-
-  playLoop();
-  bgIntervalRef.current = setInterval(playLoop, 1800);
-};
 
   const stopBackgroundMusic = () => {
     if (bgIntervalRef.current) {
@@ -424,7 +426,7 @@ useEffect(() => {
 
     const opponent =
       mode === "ai"
-        ? getAiChoice(choice, history, rewardPool, hint)
+        ? getAiMove(strategy, choice, history, rewardPool)
         : getSimulatedPlayer2Choice(history.length + 1, rewardPool);
 
     setTimeout(() => {
@@ -492,6 +494,9 @@ useEffect(() => {
       const updatedHistory = [round, ...history];
       setHistory(updatedHistory);
 
+      // ✅ SAVE TO FIREBASE
+      saveGame(round);
+
       setOpponentChoice(opponent);
       setCurrentResult({
         ...result,
@@ -545,8 +550,8 @@ useEffect(() => {
 
       {showOverlay && currentResult && (
         <div className="result-overlay" onClick={() => {
-            setShowOverlay(false);
-            startNewPlayTurn();
+          setShowOverlay(false);
+          startNewPlayTurn();
         }}>
           <div
             className={`overlay-card ${currentResult.outcome}`}
@@ -567,7 +572,7 @@ useEffect(() => {
               {Array.from({
                 length:
                   currentResult.outcome === "win-player" ||
-                  currentResult.outcome === "win-both"
+                    currentResult.outcome === "win-both"
                     ? 30
                     : 18,
               }).map((_, i) => (
@@ -585,8 +590,8 @@ useEffect(() => {
             </div>
 
             <button className="overlay-close-btn" onClick={() => {
-                setShowOverlay(false);
-                startNewPlayTurn();
+              setShowOverlay(false);
+              startNewPlayTurn();
             }}>
               Next Round
             </button>
@@ -670,7 +675,7 @@ useEffect(() => {
                 setMode("pvp");
               }}
             >
-              Simulated PvP
+              Simulated Opponent Mode
             </button>
           </div>
         </header>
@@ -728,6 +733,55 @@ useEffect(() => {
                 </div>
               )}
 
+              <div className="strategy-box">
+                <h3 className="strategy-title">🎮 AI Strategy</h3>
+
+                <div className="strategy-buttons">
+                  <button
+                    className={strategy === "adaptive" ? "active" : ""}
+                    onClick={() => setStrategy("adaptive")}
+                  >
+                    🧠 Adaptive
+                  </button>
+
+                  <button
+                    className={strategy === "random" ? "active" : ""}
+                    onClick={() => setStrategy("random")}
+                  >
+                    🎲 Random
+                  </button>
+
+                  <button
+                    className={strategy === "tit-for-tat" ? "active" : ""}
+                    onClick={() => setStrategy("tit-for-tat")}
+                  >
+                    🔁 Tit-for-Tat
+                  </button>
+
+                  <button
+                    className={strategy === "greedy" ? "active" : ""}
+                    onClick={() => setStrategy("greedy")}
+                  >
+                    🔥 Greedy
+                  </button>
+                </div>
+
+                {/* ✅ SELECTED STRATEGY DISPLAY */}
+                <div className="selected-strategy">
+                  {strategy === "adaptive" && "🧠 Adaptive Selected"}
+                  {strategy === "random" && "🎲 Random Selected"}
+                  {strategy === "tit-for-tat" && "🔁 Tit-for-Tat Selected"}
+                  {strategy === "greedy" && "🔥 Greedy Selected"}
+                </div>
+
+                <p className="strategy-desc">
+                  {strategy === "adaptive" && "Learns from your behavior."}
+                  {strategy === "random" && "Completely unpredictable decisions."}
+                  {strategy === "tit-for-tat" && "Copies your last move."}
+                  {strategy === "greedy" && "Maximizes reward aggressively."}
+                </p>
+              </div>
+
               {currentScreen === "play" && (
                 <div className="screen-block fade-in">
                   <div className="play-head">
@@ -769,9 +823,8 @@ useEffect(() => {
 
                   <div className="choice-grid">
                     <button
-                      className={`choice-btn split-btn ${
-                        playerChoice.includes("Split") ? "selected" : ""
-                      }`}
+                      className={`choice-btn split-btn ${playerChoice.includes("Split") ? "selected" : ""
+                        }`}
                       onClick={() => executeRound("Split")}
                       disabled={aiThinking}
                     >
@@ -780,9 +833,8 @@ useEffect(() => {
                     </button>
 
                     <button
-                      className={`choice-btn steal-btn ${
-                        playerChoice === "Steal" ? "selected" : ""
-                      }`}
+                      className={`choice-btn steal-btn ${playerChoice === "Steal" ? "selected" : ""
+                        }`}
                       onClick={() => executeRound("Steal")}
                       disabled={aiThinking}
                     >
@@ -901,6 +953,10 @@ useEffect(() => {
                 {mode === "ai" ? "Opponent Analysis" : "Player 2 Analysis"}
               </span>
               <h3>{mode === "ai" ? "AI Avatar" : "Simulated Opponent"}</h3>
+              <p>Player 2 is deciding the next move.</p>
+              <p style={{ fontSize: "0.8rem", opacity: 0.7 }}>
+                Player 2 is AI-simulated for behavioral testing.
+              </p>
 
               <div className="ai-avatar-wrap">
                 <div className="avatar-mood-title">

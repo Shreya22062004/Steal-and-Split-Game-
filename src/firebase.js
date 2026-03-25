@@ -1,25 +1,18 @@
 import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
 import { getDatabase } from "firebase/database";
 
-// ⚠️ Yaha apna REAL config daalna (Firebase console se)
 const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId: "YOUR_APP_ID",
-  databaseURL: "https://YOUR_PROJECT.firebaseio.com",
+  apiKey: "AIzaSyBeYrMTqZjO3JaWirKo6o6MU8lCXJvRAM0",
+  authDomain: "steal-and-split-game.firebaseapp.com",
+  projectId: "steal-and-split-game",
+  storageBucket: "steal-and-split-game.firebasestorage.app",
+  messagingSenderId: "303238794565",
+  appId: "1:303238794565:web:d38a75e35f037eef3d022c",
+  measurementId: "G-5EGQZRCE0Z",
+  databaseURL: "https://steal-and-split-game-default-rtdb.asia-southeast1.firebasedatabase.app"
 };
 
-// 🛑 Safety wrapper (white screen avoid karega)
-let app;
-try {
-  app = initializeApp(firebaseConfig);
-} catch (err) {
-  console.error("Firebase init error:", err);
-}
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
 
-export const auth = getAuth(app);
-export const db = getDatabase(app);
+export { db };
